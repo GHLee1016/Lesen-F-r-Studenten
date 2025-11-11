@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Lesen Für Studenten</title>
+
+  <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%232b8cff'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-size='32' fill='white'%3EG%3C/text%3E%3C/svg%3E">
+
+  <script src="https://webgazer.cs.brown.edu/webgazer.js" defer></script>
+
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f6f7fb; }
+    /* 2-칼럼(Grid): 본문(최대 900px) + 우측 패널(300px) */
+    .page {
+      display: grid;
+      grid-template-columns: minmax(0, 900px) 300px;
+      gap: 16px;
+      justify-content: center;
+      padding: 16px;
+    }
+    /* 본문 */
+    #wrap {
+      position: relative;
+      background: #fff;
+      padding: 16px;
+      border-radius: 10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.06);
+      overflow: visible;
+    }
+    #article { line-height: 1.7; font-size: 18px; color:#111; }
+    #article h1 { font-size: 40px; margin: 16px 0 24px; }
+    /* 오버레이 캔버스 */
+    #overlay {
+      position: absolute;
+      left: 16px;
+      top: 16px;
+      pointer-events: none;   /* 텍스트 선택 방해 금지 */
+      z-index: 5;
+    }
+    /* 우측 패널(sticky) */
+    #side {
+      position: sticky;
+      top: 16px;
+      align-self: start;
+      background:#fff;
+      border:1px solid #ddd;
+      padding:12px;
+      border-radius:8px;
+      box-shadow:0 6px 20px rgba(0,0,0,.06);
+      width: 300px;
+      z-index: 10;
+    }
+    #users { max-height: 200px; overflow:auto; border:1px solid #eee; padding:8px; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    input[type="text"] { flex: 1 1 auto; }
+    button { margin-right: 8px; cursor: pointer; }
+    /* 좁은 화면 폴백: 한 칼럼 */
+    @media (max-width: 1220px) {
+      .page { grid-template-columns: 1fr; }
+      #side { position: static; width: auto; margin-top: 8px; }
+    }
+    /* 가로 스크롤 방지 */
+    html, body { overflow-x: hidden; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div id="wrap">
+      <div id="article">
+        <h1>기사 제목</h1>
+        <p>여기에 긴 텍스트가 있다고 가정합니다. 스크롤해도 오버레이가 텍스트 위에 남도록 wrap 기준 좌표계를 사용합니다.</p>
+        <p>WebGazer 또는 YOLOv8+ResNet 파이프라인에서 나온 시선 좌표(px)를 사용합니다</p>
+        <p>권한 문제 발생 시 마우스 위치를 시선으로 간주하여 오버레이를 그립니다.</p>
+        <p style="height: 1200px"></p>
+      </div>
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <aside id="side">
+      <div class="row">
+        <label style="white-space:nowrap">User ID</label>
+        <input id="userId" type="text" />
+        <button id="connectBtn">Connect</button>
+      </div>
+
+      <div class="row">
+        <!-- simplified UI: variant/load removed -->
+      </div>
+
+      <!-- fusion, toggles, export, api override removed -->
+
+      <p style="margin:6px 0 4px">Connected Users</p>
+      <div id="users"></div>
+      <hr/>
+
+      <!-- AOI/select and server export removed -->
+      <hr/>
+      <div class="row" style="margin-top:8px">
+        <button id="startMeasureBtn">Start Measure</button>
+        <button id="stopMeasureBtn" disabled>Stop</button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Calibration layer -->
+  <div id="calibLayer" style="position:absolute; inset:16px auto auto 16px; pointer-events:none; z-index:20; display:none;">
+    <canvas id="calibCanvas"></canvas>
+    <div id="calibHint" style="position:absolute; top:8px; left:8px; background:rgba(0,0,0,.6); color:#fff; padding:6px 10px; border-radius:6px; font-size:14px;">
+      시선 보정 중... 표시된 점을 바라봐 주세요 (자동 진행)
+    </div>
+  </div>
+
+  <!-- Measurement completed modal -->
+  <div id="doneModal" style="position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:50; background:rgba(0,0,0,.35);">
+    <div style="background:#fff; width:min(520px, 92vw); padding:16px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.2)">
+      <h3 style="margin:0 0 8px">측정이 완료되었습니다</h3>
+      <p style="margin:0 0 12px; color:#444">히트맵과 경로는 본문 위에 표시됩니다.</p>
+      <div id="sessionStats" style="margin:0 0 12px; color:#222">
+        <div>소요 시간: <span id="durText">-</span></div>
+        <div>점수: <span id="scoreText">-</span></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end">
+        <button id="modalClose">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // 백엔드 주소(자동 감지 + 폴백, ?api=... 로 재정의 가능)
+    let API = (new URLSearchParams(location.search)).get('api') || "https://localhost:8443";
+    let WSS = API.replace("https","wss").replace("http","ws");
+    function setAPI(base){
+      API = base;
+      WSS = base.replace("https","wss").replace("http","ws");
+      console.log("[api] using", API);
+    }
+
+    // --- DOM 요소 ---
+    const wrap = document.getElementById('wrap');
+    const article = document.getElementById('article');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+
+    // Calibration layer elements
+    const calibLayer = document.getElementById('calibLayer');
+    const calibCanvas = document.getElementById('calibCanvas');
+    const calibCtx = calibCanvas.getContext?.('2d') || null;
+    const calibHint = document.getElementById('calibHint');
+
+    // Modal elements
+    const doneModal = document.getElementById('doneModal');
+    const modalClose = document.getElementById('modalClose');
+    const durText = document.getElementById('durText');
+    const scoreText = document.getElementById('scoreText');
+
+    const usersDiv = document.getElementById('users');
+    const userIdInput = document.getElementById('userId');
+    const connectBtn = document.getElementById('connectBtn');
+    // simplified UI: removed extra controls
+
+    // --- 상태 변수 ---
+    let ws = null;
+    let useMouseFallback = false;
+    const MIN_DT = Math.round(1000/15); // 15Hz
+    let lastSent = 0;
+    let lastRecorded = 0;
+    let isMeasuring = false;
+    let measureStartAt = null;
+    
+    // [신규] 그리기 상태
+    let showPath = true;
+    let showHeatmap = true;
+    let currentGaze = { x: 0, y: 0 }; // 현재 시선 위치 (실시간)
+    let lastWebgazer = { x: 0, y: 0, t: 0 };
+    let lastServerGaze = { x: null, y: null, conf: 0, t: 0 };
+    let fusionMode = 'fused';
+    let wWebgazer = 0.6, wServer = 0.4;
+
+    // [신규] 클라이언트 데이터 버퍼
+    let gazePath = []; // [{x,y,t}]
+    const heatmapRows = 60, heatmapCols = 100;
+    let gazeHeatmap = Array.from({length: heatmapRows}, () => Array(heatmapCols).fill(0));
+
+    // Calibration state (affine: 2x3 matrix)
+    let calibMatrix = null; // [[a,b,c],[d,e,f]]
+
+    function setMeasureState(running){
+      isMeasuring = running;
+      const startBtn = document.getElementById('startMeasureBtn');
+      const stopBtn = document.getElementById('stopMeasureBtn');
+      if (startBtn && stopBtn) {
+        startBtn.disabled = running;
+        stopBtn.disabled = !running;
+      }
+      if (running) {
+        measureStartAt = Date.now();
+        lastRecorded = 0; // reset local record throttle
+        // reset buffers on start
+        gazePath = [];
+        gazeHeatmap = Array.from({length: heatmapRows}, () => Array(heatmapCols).fill(0));
+        // hide overlays during measurement
+        showPath = false;
+        showHeatmap = false;
+        drawOverlay();
+        // seed first sample immediately to ensure scoring even if few frames arrive
+        const [sx, sy] = applyClientCalib(currentGaze.x, currentGaze.y);
+        recordGazeData(sx, sy, measureStartAt);
+      }
+    }
+
+    // --- 초기화 ---
+    userIdInput.value = localStorage.getItem("gaze_user_id") || `user_${Math.random().toString(36).slice(2,7)}`;
+
+    // --- 캔버스 리사이즈 ---
+    function resizeCanvas() {
+      const rect = wrap.getBoundingClientRect();
+      const padding = 32;
+      const w = Math.max(0, Math.floor(rect.width - padding));
+      const h = Math.max(0, Math.ceil(article.scrollHeight));
+      canvas.width = w; canvas.height = h;
+      canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+      drawOverlay(); // 리사이즈 시 다시 그리기
+
+      // calib layer match overlay
+      if (calibCanvas) {
+        calibCanvas.width = w; calibCanvas.height = h;
+        calibCanvas.style.width = w + 'px'; calibCanvas.style.height = h + 'px';
+        if (calibVisible) drawCalibFrame();
+      }
+    }
+    new ResizeObserver(resizeCanvas).observe(wrap);
+    window.addEventListener('load', resizeCanvas);
+    window.addEventListener('resize', resizeCanvas);
+
+    // --- [신규] 통합 그리기 함수 ---
+    function drawOverlay() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 1. 히트맵 그리기
+      if (showHeatmap && canvas.width > 0 && canvas.height > 0) {
+        const cellWidth = canvas.width / heatmapCols;
+        const cellHeight = canvas.height / heatmapRows;
+        
+        // 최대값 찾기 (정규화용)
+        let maxVal = 0;
+        for (let r = 0; r < heatmapRows; r++) {
+          for (let c = 0; c < heatmapCols; c++) {
+            if (gazeHeatmap[r][c] > maxVal) maxVal = gazeHeatmap[r][c];
+          }
+        }
+        if (maxVal === 0) maxVal = 1; // 0으로 나누기 방지
+
+        for (let r = 0; r < heatmapRows; r++) {
+          for (let c = 0; c < heatmapCols; c++) {
+            const val = gazeHeatmap[r][c];
+            if (val > 0) {
+              // 값을 기반으로 투명도 계산 (최대값의 5배 증폭, 최대 0.8)
+              const alpha = Math.min(0.8, (val / maxVal) * 5); 
+              ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+              ctx.fillRect(c * cellWidth, r * cellHeight, cellWidth, cellHeight);
+            }
+          }
+        }
+      }
+
+      // 2. 경로 선 그리기
+      if (showPath && gazePath.length >= 2) {
+        ctx.strokeStyle = "rgba(0, 128, 255, 0.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(gazePath[0].x, gazePath[0].y);
+        for (let i = 1; i < gazePath.length; i++) {
+          ctx.lineTo(gazePath[i].x, gazePath[i].y);
+        }
+        ctx.stroke();
+      }
+
+      // 3. 현재 시선 위치 그리기 (파란 점)
+      if (showPath) { // '경로 선'이 켜져 있을 때만 현재 위치 표시
+        ctx.fillStyle = '#2b8cff';
+        ctx.beginPath();
+        ctx.arc(currentGaze.x, currentGaze.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // --- [신규] 클라이언트 데이터 저장 함수 ---
+    function recordGazeData(x, y, t) {
+      if (!isMeasuring) return;
+      // 1. 경로 데이터 저장
+      gazePath.push({x, y, t});
+
+      // 2. 히트맵 데이터 누적
+      const cellHeight = canvas.height / heatmapRows;
+      const cellWidth = canvas.width / heatmapCols;
+
+      if (cellHeight === 0 || cellWidth === 0) return; // 캔버스 크기 0일 때 방지
+
+      const h_row = Math.floor(y / cellHeight);
+      const h_col = Math.floor(x / cellWidth);
+
+      if (h_row >= 0 && h_row < heatmapRows && h_col >= 0 && h_col < heatmapCols) {
+        gazeHeatmap[h_row][h_col]++;
+      }
+    }
+
+    // AOI UI 제거. 필요 시 나중에 복구 가능.
+    let selectedRects = [];
+    function hitTest(x,y,rects){ for(const r of rects){ if(x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h) return true;} return false; }
+
+    // --- WebSocket 연결 ---
+    function connect() {
+      const uid = userIdInput.value.trim();
+      if (!uid) return alert("User ID를 입력하세요.");
+      localStorage.setItem("gaze_user_id", uid);
+
+      try { ws && ws.close(); } catch(e) {}
+      ws = new WebSocket(`${WSS}/ws?user_id=${encodeURIComponent(uid)}`);
+      ws.onopen = async () => {
+        console.log("ws open");
+        // 보조: 현재 접속자 목록을 즉시 채워넣기
+        try {
+          const r = await fetch(`${API}/users`, { cache: "no-store" });
+          if (r.ok) {
+            const js = await r.json();
+            usersDiv.innerHTML = (js.users || []).map(u => `<div>${u}</div>`).join('');
+          }
+        } catch {}
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'users') {
+            usersDiv.innerHTML = msg.users.map(u => `<div>${u}</div>`).join('');
+          } else if (msg.type === 'server_gaze') {
+            // Expect: {type:'server_gaze', x, y, conf?, t?} in container coords
+            if (typeof msg.x === 'number' && typeof msg.y === 'number') {
+              const conf = typeof msg.conf === 'number' ? msg.conf : 0.7;
+              lastServerGaze = { x: msg.x, y: msg.y, conf, t: msg.t || Date.now() };
+            }
+          }
+        } catch {}
+      };
+      ws.onclose = () => console.log("ws closed");
+      ws.onerror = (e) => console.warn("ws error", e);
+    }
+    connectBtn.onclick = connect;
+
+    // --- 시선추적 → 실패 시 마우스 폴백 ---
+    function toContainer(xw, yw) {
+      const rect = wrap.getBoundingClientRect();
+      const x = xw - rect.left;
+      const y = yw - rect.top + window.scrollY;
+      return [x, y];
+    }
+    let sx = null, sy = null;
+    const ALPHA = 0.35;
+    function ema(x,y){ if(sx===null||sy===null){sx=x;sy=y;return [x,y];} sx=ALPHA*x+(1-ALPHA)*sx; sy=ALPHA*y+(1-ALPHA)*sy; return [sx,sy]; }
+
+    function fuseGaze(gx, gy) {
+      // gx,gy: webgazer estimate in container coords
+      // lastServerGaze: optional refined estimate
+      let fx = gx, fy = gy;
+      if (fusionMode === 'webgazer') return [gx, gy];
+      if (fusionMode === 'server') {
+        if (lastServerGaze.x != null && lastServerGaze.y != null) return [lastServerGaze.x, lastServerGaze.y];
+        return [gx, gy];
+      }
+      // fused
+      if (lastServerGaze.x == null || lastServerGaze.y == null) return [gx, gy];
+      // dynamic weights by confidence
+      const conf = Math.max(0, Math.min(1, lastServerGaze.conf || 0));
+      const ws = wServer * (0.5 + 0.5*conf);
+      const wg = Math.max(0, 1 - ws);
+      fx = wg * gx + ws * lastServerGaze.x;
+      fy = wg * gy + ws * lastServerGaze.y;
+      return [fx, fy];
+    }
+
+    function enableMouseFallback(){
+      if (useMouseFallback) return;
+      useMouseFallback = true;
+      console.warn('[gaze] fallback → mouse');
+      window.addEventListener('mousemove', (e) => {
+        // WS가 없어도 로컬 기록과 표시를 위해 동작
+        const rect = wrap.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top + window.scrollY;
+        const now = Date.now();
+        const [ex,ey] = ema(x,y);
+
+        // webgazer-substitute raw (mouse) -> fuse
+        lastWebgazer = { x: ex, y: ey, t: now };
+        const [fx, fy] = fuseGaze(ex, ey);
+        currentGaze = { x: fx, y: fy };
+        drawOverlay(); 
+        // 15Hz 저장(로컬) 제한
+        if (now - lastRecorded >= MIN_DT) {
+          lastRecorded = now;
+          const [fx2,fy2]=applyClientCalib(fx,fy);
+          recordGazeData(fx2, fy2, now);
+        }
+        // 15Hz 전송 제한
+        if (ws && ws.readyState === 1 && (now - lastSent) >= MIN_DT) {
+        lastSent = now;
+        const [cx2,cy2]=applyClientCalib(ex,ey); 
+          const [fx2,fy2]=applyClientCalib(fx,fy);
+        ws.send(JSON.stringify({ type:'gaze', x:cx2, y:cy2, t:now, source:'mouse' }));
+          ws.send(JSON.stringify({ type:'gaze_fused', x:fx2, y:fy2, t:now, base:'mouse' }));
+        }
+        
+      }, { passive:true });
+    }
+
+    async function startGaze(){
+      if (!('mediaDevices' in navigator) || !('getUserMedia' in navigator.mediaDevices)) {
+        return enableMouseFallback();
+      }
+      try{
+        window.webgazer
+          .setRegression('ridge')
+          .showVideoPreview(false).showPredictionPoints(false)
+          .showFaceOverlay(false).showFaceFeedbackBox(false);
+        await window.webgazer.begin();
+
+        let gotPrediction = false;
+        setTimeout(()=>{ if(!gotPrediction) enableMouseFallback(); }, 3000);
+
+        const loop = async () => {
+          try{
+            const pred = await window.webgazer.getCurrentPrediction();
+            const now = Date.now();
+            if (pred && typeof pred.x==='number' && typeof pred.y==='number') {
+              gotPrediction = true;
+              const [cx,cy] = toContainer(pred.x, pred.y);
+              const [ex,ey] = ema(cx,cy);
+              
+              // save webgazer raw and fuse
+              lastWebgazer = { x: ex, y: ey, t: now };
+              const [fx, fy] = fuseGaze(ex, ey);
+              currentGaze = { x: fx, y: fy };
+              drawOverlay();
+
+              // 15Hz 로컬 저장
+              if ((now - lastRecorded) >= MIN_DT) {
+                lastRecorded = now;
+                const [fx2,fy2]=applyClientCalib(fx,fy);
+                recordGazeData(fx2, fy2, now);
+              }
+              // 15Hz 전송
+              if (ws && ws.readyState===1 && (now-lastSent)>=MIN_DT) {
+                lastSent = now;
+                const [gx2,gy2]=applyClientCalib(ex,ey); 
+                const [fx2,fy2]=applyClientCalib(fx,fy);
+                ws.send(JSON.stringify({ type:'gaze', x:gx2, y:gy2, t:now, source:'gaze' }));
+                ws.send(JSON.stringify({ type:'gaze_fused', x:fx2, y:fy2, t:now, base:'gaze' }));
+              }
+            }
+          }catch(e){ console.warn('[gaze] loop error', e); }
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      }catch(err){
+        console.warn('[gaze] begin failed', err);
+        enableMouseFallback();
+      }
+    }
+
+    // Connect 버튼: WS 연결 + 시선추적 시도 + 자동 캘리브레이션
+    const oldConnect = connectBtn.onclick;
+    connectBtn.onclick = async () => { 
+      oldConnect(); 
+      await startGaze(); 
+      await runCalibration(); 
+    };
+ 
+    // --- 기사 로더 ---
+    async function loadArticle(v = "b1") {
+      try {
+        let res;
+        try {
+          res = await fetch(`${API}/article?v=${encodeURIComponent(v)}`, { cache: "no-store" });
+        } catch (e) {
+          // HTTPS 인증서 문제 등으로 실패 시 HTTP:8000 폴백 시도
+          const host = location.hostname || "localhost";
+          const fallback = `http://${host}:8000`;
+          console.warn("[api] primary fetch failed, trying fallback", fallback, e);
+          const test = await fetch(`${fallback}/article?v=${encodeURIComponent(v)}`, { cache: "no-store" });
+          if (test && test.ok) {
+            setAPI(fallback);
+            res = test;
+          } else {
+            throw e;
+          }
+        }
+        if (!res.ok) {
+          // 응답이 왔지만 오류 코드인 경우에도 폴백 시도
+          const host = location.hostname || "localhost";
+          const fallback = `http://${host}:8000`;
+          if (!API.startsWith(fallback)) {
+            console.warn("[api] non-OK from primary, trying fallback", res.status, fallback);
+            const test2 = await fetch(`${fallback}/article?v=${encodeURIComponent(v)}`, { cache: "no-store" });
+            if (test2 && test2.ok) {
+              setAPI(fallback);
+              res = test2;
+            } else {
+              throw new Error(`HTTP ${res.status}`);
+            }
+          } else {
+            throw new Error(`HTTP ${res.status}`);
+          }
+        }
+        const html = await res.text();
+        document.getElementById('article').innerHTML = html;
+        
+        if (typeof resizeCanvas === 'function') resizeCanvas();
+        if (window.paintAOIs) paintAOIs([]);
+
+        // [신규] 새 기사 로드 시, 클라이언트 버퍼 초기화
+        gazePath = [];
+        gazeHeatmap = Array.from({length: heatmapRows}, () => Array(heatmapCols).fill(0));
+        drawOverlay(); // 캔버스 지우기
+
+      } catch (e) {
+        console.error('[loadArticle]', e);
+        // 안내 메시지는 콘솔로만 출력
+      }
+    }
+    loadArticle("b1"); // 초기 로드
+
+    // --- 좌표 클라이언트 보정 (필요 시 사용) ---
+    function applyClientCalib(x,y) {
+      if (!calibMatrix) return [x,y];
+      const [[a,b,c],[d,e,f]] = calibMatrix;
+      const X = a*x + b*y + c;
+      const Y = d*x + e*y + f;
+      return [X,Y];
+    }
+
+    // 토글 UI 제거: 오버레이 표시 여부는 코드에서 제어
+
+    // 내보내기 UI 제거
+
+    // 서버 내보내기 UI 제거
+
+    // Fusion UI 제거
+
+    // ---------- Calibration ----------
+    let calibVisible = false;
+    const calibPointsNorm = [
+      [0.1,0.1],[0.5,0.1],[0.9,0.1],
+      [0.1,0.5],[0.5,0.5],[0.9,0.5],
+      [0.1,0.9],[0.5,0.9],[0.9,0.9],
+    ];
+    let calibStep = 0;
+    let calibSamples = []; // {raw:[x,y], target:[X,Y]}
+
+    function drawCalibFrame(){
+      if (!calibCtx) return;
+      calibCtx.clearRect(0,0,calibCanvas.width,calibCanvas.height);
+      // draw all points as faint
+      calibCtx.fillStyle = 'rgba(0,0,0,.08)';
+      for (const [nx,ny] of calibPointsNorm) {
+        const x = nx * calibCanvas.width;
+        const y = ny * calibCanvas.height;
+        calibCtx.beginPath();
+        calibCtx.arc(x, y, 6, 0, Math.PI*2);
+        calibCtx.fill();
+      }
+      // highlight current
+      if (calibStep < calibPointsNorm.length) {
+        const [nx,ny] = calibPointsNorm[calibStep];
+        const x = nx * calibCanvas.width;
+        const y = ny * calibCanvas.height;
+        calibCtx.fillStyle = '#2b8cff';
+        calibCtx.beginPath();
+        calibCtx.arc(x, y, 10, 0, Math.PI*2);
+        calibCtx.fill();
+      }
+    }
+
+    function showCalibLayer(show){
+      calibVisible = show;
+      calibLayer.style.display = show ? 'block' : 'none';
+      if (show) drawCalibFrame();
+    }
+
+    function solveAffine(samples){
+      // Solve for [a b c; d e f] minimizing sum || [a b c; d e f]*[x y 1]^T - [X Y]^T ||^2
+      // Build A (2N x 6), b (2N)
+      const A = [];
+      const bvec = [];
+      for (const s of samples) {
+        const x = s.raw[0], y = s.raw[1];
+        const X = s.target[0], Y = s.target[1];
+        A.push([x, y, 1, 0, 0, 0]);
+        bvec.push(X);
+        A.push([0, 0, 0, x, y, 1]);
+        bvec.push(Y);
+      }
+      // Normal equations: (A^T A) theta = A^T b
+      const AT = (M)=> {
+        const rows=M.length, cols=M[0].length;
+        const out = Array.from({length:cols},()=>Array(rows).fill(0));
+        for (let i=0;i<rows;i++) for(let j=0;j<cols;j++) out[j][i]=M[i][j];
+        return out;
+      };
+      const matMul = (M,N)=> {
+        const r=M.length, c=N[0].length, k=N.length;
+        const out = Array.from({length:r},()=>Array(c).fill(0));
+        for (let i=0;i<r;i++) for(let j=0;j<c;j++) {
+          let s=0; for (let t=0;t<k;t++) s+=M[i][t]*N[t][j];
+          out[i][j]=s;
+        }
+        return out;
+      };
+      const ATm = AT(A);
+      const ATA = matMul(ATm, A); // 6x6
+      const ATb = matMul(ATm, bvec.map(v=>[v])); // 6x1
+      // Solve 6x6 linear system via Gaussian elimination
+      const n=6;
+      const M = Array.from({length:n}, (_,i)=> [...ATA[i], ATb[i][0]]);
+      for (let col=0; col<n; col++){
+        // pivot
+        let piv = col;
+        for (let r=col+1;r<n;r++) if (Math.abs(M[r][col])>Math.abs(M[piv][col])) piv=r;
+        if (Math.abs(M[piv][col])<1e-8) return null;
+        if (piv!==col){ const tmp=M[col]; M[col]=M[piv]; M[piv]=tmp; }
+        // normalize
+        const div = M[col][col];
+        for (let c=col;c<=n;c++) M[col][c]/=div;
+        // eliminate
+        for (let r=0;r<n;r++){
+          if (r===col) continue;
+          const f = M[r][col];
+          for (let c=col;c<=n;c++) M[r][c]-=f*M[col][c];
+        }
+      }
+      const theta = M.map(row=>row[n]);
+      return [[theta[0],theta[1],theta[2]],[theta[3],theta[4],theta[5]]];
+    }
+
+    async function runCalibration(){
+      // Pause measurement if running
+      const wasMeasuring = isMeasuring;
+      if (wasMeasuring) setMeasureState(false);
+
+      calibSamples = [];
+      calibStep = 0;
+      showCalibLayer(true);
+
+      // auto-advance each point: collect 20 samples over ~800ms
+      const perPoint = 20;
+      const pointDelayMs = 40;
+      while (calibStep < calibPointsNorm.length){
+        drawCalibFrame();
+        // collect samples for current point
+        for (let i=0;i<perPoint;i++){
+          const [nx,ny] = calibPointsNorm[calibStep];
+          const targetX = nx * canvas.width;
+          const targetY = ny * canvas.height;
+          // Use current raw gaze without applying calibration
+          const rawX = currentGaze.x;
+          const rawY = currentGaze.y;
+          calibSamples.push({ raw:[rawX, rawY], target:[targetX, targetY] });
+          await new Promise(res=>setTimeout(res, pointDelayMs));
+        }
+        calibStep++;
+      }
+      showCalibLayer(false);
+
+      // solve affine
+      if (calibSamples.length >= 6){ // at least 3 points (2 eq per point) but we used 9
+        const mat = solveAffine(calibSamples);
+        if (mat) {
+          calibMatrix = mat;
+          console.log('[calib] matrix', calibMatrix);
+          alert('시선 보정이 완료되었습니다.');
+        } else {
+          calibMatrix = null;
+          alert('보정 행렬 계산에 실패했습니다.');
+        }
+      } else {
+        alert('보정 샘플이 충분하지 않습니다.');
+      }
+
+      if (wasMeasuring) setMeasureState(true);
+    }
+
+    // Calibrate button removed; calibration starts automatically after Connect
+
+    // ---------- Measurement controls ----------
+    document.getElementById('startMeasureBtn').onclick = () => {
+      setMeasureState(true);
+    };
+    document.getElementById('stopMeasureBtn').onclick = () => {
+      if (!isMeasuring) return;
+      setMeasureState(false);
+      const endAt = Date.now();
+      const durationMs = Math.max(0, (measureStartAt ? (endAt - measureStartAt) : 0));
+      // ensure at least one sample for scoring
+      if (gazePath.length === 0 && Number.isFinite(currentGaze.x) && Number.isFinite(currentGaze.y)) {
+        gazePath.push({ x: currentGaze.x, y: currentGaze.y, t: endAt });
+      }
+      // accuracy-based score
+      const score = Math.round(Math.max(0, Math.min(100, computeAccuracyScore())));
+      // send score to server for admin EMA/grouping
+      try {
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'score', t: endAt, score }));
+        }
+      } catch {}
+      // format duration text
+      const mm = Math.floor(durationMs / 60000);
+      const ss = Math.floor((durationMs % 60000) / 1000);
+      durText.textContent = `${mm}:${String(ss).padStart(2,'0')} (${durationMs}ms)`;
+      scoreText.textContent = `${score}`;
+      // show modal with overlays
+      showPath = true; showHeatmap = true;
+      drawOverlay();
+      doneModal.style.display = 'flex';
+    };
+
+    modalClose.onclick = () => { doneModal.style.display = 'none'; };
+
+    // --- Accuracy score computation ---
+    function rectDistance(x, y, r){
+      const dx = Math.max(r.x - x, 0, x - (r.x + r.w));
+      const dy = Math.max(r.y - y, 0, y - (r.y + r.h));
+      return Math.hypot(dx, dy);
+    }
+    function nearestRectDistance(x, y, rects){
+      if (!rects || rects.length === 0) return null;
+      let d = Infinity;
+      for (const r of rects) {
+        const dd = rectDistance(x, y, r);
+        if (dd < d) d = dd;
+      }
+      return d;
+    }
+    function computeAccuracyScore(){
+      const samples = gazePath;
+      const N = samples.length;
+      if (!N) return 0;
+      // Prefer AOI-based accuracy if user selected AOIs
+      const rects = (typeof selectedRects !== 'undefined' && Array.isArray(selectedRects)) ? selectedRects : [];
+      if (rects.length > 0) {
+        let inside = 0;
+        let distSum = 0;
+        for (const p of samples){
+          if (hitTest(p.x, p.y, rects)) { inside++; continue; }
+          const d = nearestRectDistance(p.x, p.y, rects);
+          distSum += (d ?? 0);
+        }
+        const insideRatio = inside / N; // 0..1
+        // normalize distance by viewport diagonal
+        const diag = Math.hypot(canvas.width, canvas.height) || 1;
+        const meanDist = distSum / Math.max(1, (N - inside));
+        const distPenalty = Math.min(1, meanDist / (diag * 0.12)); // 12% of diag -> full penalty
+        const score = 100 * (0.85 * insideRatio + 0.15 * (1 - distPenalty));
+        return score;
+      }
+      // Fallback: stability/dispersion-based surrogate when no AOI provided
+      // compute median-centered dispersion
+      const xs = samples.map(p=>p.x), ys = samples.map(p=>p.y);
+      const mx = median(xs), my = median(ys);
+      const disp = Math.sqrt(mean(samples.map(p => (p.x-mx)*(p.x-mx) + (p.y-my)*(p.y-my))));
+      const diag = Math.hypot(canvas.width, canvas.height) || 1;
+      const normDisp = Math.min(1, disp / (diag * 0.15)); // 15% of diag -> worst
+      return 100 * (1 - normDisp);
+    }
+    function median(arr){
+      const a = [...arr].sort((a,b)=>a-b);
+      const n = a.length; if (!n) return 0;
+      return n%2 ? a[(n-1)/2] : (a[n/2-1]+a[n/2])/2;
+    }
+    function mean(arr){ if(!arr.length) return 0; return arr.reduce((s,v)=>s+v,0)/arr.length; }
+
+  </script>
+  </body>
+</html>
