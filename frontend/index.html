@@ -539,14 +539,6 @@
       return [X,Y];
     }
 
-    // 토글 UI 제거: 오버레이 표시 여부는 코드에서 제어
-
-    // 내보내기 UI 제거
-
-    // 서버 내보내기 UI 제거
-
-    // Fusion UI 제거
-
     // ---------- Calibration ----------
     let calibVisible = false;
     const calibPointsNorm = [
@@ -705,7 +697,7 @@
         gazePath.push({ x: currentGaze.x, y: currentGaze.y, t: endAt });
       }
       // accuracy-based score
-      const score = Math.round(Math.max(0, Math.min(100, computeAccuracyScore())));
+      const score = Math.round(Math.max(0, Math.min(100,())));
       // send score to server for admin EMA/grouping
       try {
         if (ws && ws.readyState === 1) {
@@ -745,7 +737,7 @@
       const N = samples.length;
       if (!N) return 0;
       // Prefer AOI-based accuracy if user selected AOIs
-      const rects = (typeof selectedRects !== 'undefined' && Array.isArray(selectedRects)) ? selectedRects : [];
+      const rects = (typeof selectedRects !== 'undefined' && Array.isArray(selectedRects) && selectedRects.length > 0)? selectedRects : [{x:0, y:0, w: canvas.width, h: canvas.height}]; // 캔버스 전체를 기본 AOI로 설정
       if (rects.length > 0) {
         let inside = 0;
         let distSum = 0;
