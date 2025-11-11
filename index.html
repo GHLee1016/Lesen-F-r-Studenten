@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Lesen Für Studenten</title>
+
+  <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%232b8cff'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-size='32' fill='white'%3EG%3C/text%3E%3C/svg%3E">
+
+  <script src="https://webgazer.cs.brown.edu/webgazer.js" defer></script>
+
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f6f7fb; }
+    /* 2-칼럼(Grid): 본문(최대 900px) + 우측 패널(300px) */
+    .page {
+      display: grid;
+      grid-template-columns: minmax(0, 900px) 300px;
+      gap: 16px;
+      justify-content: center;
+      padding: 16px;
+    }
+    /* 본문 */
+    #wrap {
+      position: relative;
+      background: #fff;
+      padding: 16px;
+      border-radius: 10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.06);
+      overflow: visible;
+    }
+    #article { line-height: 1.7; font-size: 18px; color:#111; }
+    #article h1 { font-size: 40px; margin: 16px 0 24px; }
+    /* 오버레이 캔버스 */
+    #overlay {
+      position: absolute;
+      left: 16px;
+      top: 16px;
+      pointer-events: none;   /* 텍스트 선택 방해 금지 */
+      z-index: 5;
+    }
+    /* 우측 패널(sticky) */
+    #side {
+      position: sticky;
+      top: 16px;
+      align-self: start;
+      background:#fff;
+      border:1px solid #ddd;
+      padding:12px;
+      border-radius:8px;
+      box-shadow:0 6px 20px rgba(0,0,0,.06);
+      width: 300px;
+      z-index: 10;
+    }
+    #users { max-height: 200px; overflow:auto; border:1px solid #eee; padding:8px; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    input[type="text"] { flex: 1 1 auto; }
+    button { margin-right: 8px; cursor: pointer; }
+    /* 좁은 화면 폴백: 한 칼럼 */
+    @media (max-width: 1220px) {
+      .page { grid-template-columns: 1fr; }
+      #side { position: static; width: auto; margin-top: 8px; }
+    }
+    /* 가로 스크롤 방지 */
+    html, body { overflow-x: hidden; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div id="wrap">
+      <div id="article">
+        <h1>기사 제목</h1>
+        <p>여기에 긴 텍스트가 있다고 가정합니다. 스크롤해도 오버레이가 텍스트 위에 남도록 wrap 기준 좌표계를 사용합니다.</p>
+        <p>WebGazer 또는 YOLOv8+ResNet 파이프라인에서 나온 시선 좌표(px)를 사용합니다</p>
+        <p>권한 문제 발생 시 마우스 위치를 시선으로 간주하여 오버레이를 그립니다.</p>
+        <p style="height: 1200px"></p>
+      </div>
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <aside id="side">
+      <div class="row">
+        <label style="white-space:nowrap">User ID</label>
+        <input id="userId" type="text" />
+        <button id="connectBtn">Connect</button>
+      </div>
+
+      <div class="row">
+        <label>Variant</label>
+        <select id="variant">
+          <option value="b1">b1</option>
+          <option value="b1plus">b1+</option>
+        </select>
+        <button id="loadArticle">Load</button>
+      </div>
+
+      <div class="row">
+        <label><input type="checkbox" id="showPathCheck" checked> 경로 선</label>
+        <label><input type="checkbox" id="showHeatmapCheck" checked> 히트맵</label>
+        <button id="exportBtn">내보내기 (Client)</button>
+      </div>
+
+      <p style="margin:6px 0 4px">Connected Users</p>
+      <div id="users"></div>
+      <hr/>
+
+      <div style="margin-top:8px">
+        <button id="exportCsv">Export CSV (Server)</button>
+        <button id="exportJson">Export JSON (Server)</button>
+      </div>
+
+      <div style="margin-top:8px">
+        <button id="startSelect">Start Select</button>
+        <button id="confirmSelect" disabled>Confirm</button>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module">
+    // 백엔드 주소(환경에 맞게 수정)
+    const API = "https://localhost:8443";
+    const WSS = API.replace("https","wss").replace("http","ws");
+
+    // --- DOM 요소 ---
+    const wrap = document.getElementById('wrap');
+    const article = document.getElementById('article');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+
+    const usersDiv = document.getElementById('users');
+    const userIdInput = document.getElementById('userId');
+    const connectBtn = document.getElementById('connectBtn');
+    const variantSel = document.getElementById('variant');
+    const loadBtn = document.getElementById('loadArticle');
+    
+    // [신규] UI 요소 (체크박스, 클라이언트 내보내기 버튼)
+    const showPathCheck = document.getElementById('showPathCheck');
+    const showHeatmapCheck = document.getElementById('showHeatmapCheck');
+    const exportBtn = document.getElementById('exportBtn');
+    
+    // [신규] 서버 내보내기 버튼 (기존 기능)
+    const exportCsvBtn = document.getElementById('exportCsv');
+    const exportJsonBtn = document.getElementById('exportJson');
+
+    // --- 상태 변수 ---
+    let ws = null;
+    let useMouseFallback = false;
+    const MIN_DT = Math.round(1000/15); // 15Hz
+    let lastSent = 0;
+    
+    // [신규] 그리기 상태
+    let showPath = true;
+    let showHeatmap = true;
+    let currentGaze = { x: 0, y: 0 }; // 현재 시선 위치 (실시간)
+
+    // [신규] 클라이언트 데이터 버퍼
+    let gazePath = []; // [{x,y,t}]
+    const heatmapRows = 60, heatmapCols = 100;
+    let gazeHeatmap = Array.from({length: heatmapRows}, () => Array(heatmapCols).fill(0));
+
+    // --- 초기화 ---
+    userIdInput.value = localStorage.getItem("gaze_user_id") || `user_${Math.random().toString(36).slice(2,7)}`;
+
+    // --- 캔버스 리사이즈 ---
+    function resizeCanvas() {
+      const rect = wrap.getBoundingClientRect();
+      const padding = 32;
+      const w = Math.max(0, Math.floor(rect.width - padding));
+      const h = Math.max(0, Math.ceil(article.scrollHeight));
+      canvas.width = w; canvas.height = h;
+      canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+      drawOverlay(); // 리사이즈 시 다시 그리기
+    }
+    new ResizeObserver(resizeCanvas).observe(wrap);
+    window.addEventListener('load', resizeCanvas);
+    window.addEventListener('resize', resizeCanvas);
+
+    // --- [신규] 통합 그리기 함수 ---
+    function drawOverlay() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 1. 히트맵 그리기
+      if (showHeatmap && canvas.width > 0 && canvas.height > 0) {
+        const cellWidth = canvas.width / heatmapCols;
+        const cellHeight = canvas.height / heatmapRows;
+        
+        // 최대값 찾기 (정규화용)
+        let maxVal = 0;
+        for (let r = 0; r < heatmapRows; r++) {
+          for (let c = 0; c < heatmapCols; c++) {
+            if (gazeHeatmap[r][c] > maxVal) maxVal = gazeHeatmap[r][c];
+          }
+        }
+        if (maxVal === 0) maxVal = 1; // 0으로 나누기 방지
+
+        for (let r = 0; r < heatmapRows; r++) {
+          for (let c = 0; c < heatmapCols; c++) {
+            const val = gazeHeatmap[r][c];
+            if (val > 0) {
+              // 값을 기반으로 투명도 계산 (최대값의 5배 증폭, 최대 0.8)
+              const alpha = Math.min(0.8, (val / maxVal) * 5); 
+              ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+              ctx.fillRect(c * cellWidth, r * cellHeight, cellWidth, cellHeight);
+            }
+          }
+        }
+      }
+
+      // 2. 경로 선 그리기
+      if (showPath && gazePath.length >= 2) {
+        ctx.strokeStyle = "rgba(0, 128, 255, 0.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(gazePath[0].x, gazePath[0].y);
+        for (let i = 1; i < gazePath.length; i++) {
+          ctx.lineTo(gazePath[i].x, gazePath[i].y);
+        }
+        ctx.stroke();
+      }
+
+      // 3. 현재 시선 위치 그리기 (파란 점)
+      if (showPath) { // '경로 선'이 켜져 있을 때만 현재 위치 표시
+        ctx.fillStyle = '#2b8cff';
+        ctx.beginPath();
+        ctx.arc(currentGaze.x, currentGaze.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // --- [신규] 클라이언트 데이터 저장 함수 ---
+    function recordGazeData(x, y, t) {
+      // 1. 경로 데이터 저장
+      gazePath.push({x, y, t});
+
+      // 2. 히트맵 데이터 누적
+      const cellHeight = canvas.height / heatmapRows;
+      const cellWidth = canvas.width / heatmapCols;
+
+      if (cellHeight === 0 || cellWidth === 0) return; // 캔버스 크기 0일 때 방지
+
+      const h_row = Math.floor(y / cellHeight);
+      const h_col = Math.floor(x / cellWidth);
+
+      if (h_row >= 0 && h_row < heatmapRows && h_col >= 0 && h_col < heatmapCols) {
+        gazeHeatmap[h_row][h_col]++;
+      }
+    }
+
+    // --- AOI (영역 선택) 관련 함수 (기존과 동일) ---
+    let selectMode = false, tmpRects = [], selectedRects = [];
+    document.getElementById('startSelect').onclick = () => {
+      selectMode = true; tmpRects = []; selectedRects = [];
+      canvas.style.visibility = 'hidden';
+      document.getElementById('confirmSelect').disabled = false;
+      article.style.userSelect = 'text';
+      article.style.webkitUserSelect = 'text';
+    };
+    document.getElementById('confirmSelect').onclick = () => {
+      if (!selectMode) return;
+      selectedRects = collectSelectionRects(article);
+      paintAOIs(selectedRects);
+      selectMode = false;
+      canvas.style.visibility = 'visible';
+      window.getSelection().removeAllRanges();
+      document.getElementById('confirmSelect').disabled = true;
+    };
+    document.addEventListener('selectionchange', () => {
+      if (!selectMode) return;
+      tmpRects = collectSelectionRects(article);
+      paintAOIs(tmpRects, true);
+    });
+    function collectSelectionRects(containerEl) {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return [];
+      const rects = [];
+      const base = containerEl.getBoundingClientRect();
+      for (let i=0; i<sel.rangeCount; i++) {
+        const r = sel.getRangeAt(i);
+        for (const cr of Array.from(r.getClientRects())) {
+          const x = Math.max(0, cr.left - base.left + window.scrollX);
+          const y = Math.max(0, cr.top  - base.top  + window.scrollY);
+          const w = Math.max(0, cr.width);
+          const h = Math.max(0, cr.height);
+          if (w>0 && h>0) rects.push({x,y,w,h});
+        }
+      }
+      return mergeRects(rects, 6, 4);
+    }
+    function mergeRects(rects, xGap=6, yGap=4) {
+      rects.sort((a,b)=> a.y===b.y ? a.x-b.x : a.y-b.y);
+      const out=[]; for (const r of rects) {
+        const last = out[out.length-1];
+        if (last && Math.abs((last.y+last.h/2)-(r.y+r.h/2))<yGap && r.x<=last.x+last.w+xGap) {
+          const nx=Math.min(last.x,r.x), ny=Math.min(last.y,r.y);
+          const rx=Math.max(last.x+last.w, r.x+r.w), ry=Math.max(last.y+last.h, r.y+r.h);
+          out[out.length-1]={x:nx,y:ny,w:rx-nx,h:ry-ny};
+        } else out.push({...r});
+      }
+      return out;
+    }
+    function paintAOIs(rects, temp=false) {
+      ctx.clearRect(0,0,canvas.width,canvas.height); // AOI 그릴 때 오버레이 지우기
+      ctx.save();
+      ctx.strokeStyle = temp ? 'rgba(43,140,255,0.6)' : 'rgba(0,180,0,0.9)';
+      ctx.fillStyle   = temp ? 'rgba(43,140,255,0.12)' : 'rgba(0,180,0,0.12)';
+      ctx.lineWidth = 2;
+      for (const r of rects) { ctx.fillRect(r.x,r.y,r.w,r.h); ctx.strokeRect(r.x,r.y,r.w,r.h); }
+      ctx.restore();
+    }
+    function hitTest(x,y,rects){ for(const r of rects){ if(x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h) return true;} return false; }
+
+    // --- WebSocket 연결 ---
+    function connect() {
+      const uid = userIdInput.value.trim();
+      if (!uid) return alert("User ID를 입력하세요.");
+      localStorage.setItem("gaze_user_id", uid);
+
+      try { ws && ws.close(); } catch(e) {}
+      ws = new WebSocket(`${WSS}/ws?user_id=${encodeURIComponent(uid)}`);
+      ws.onopen = () => console.log("ws open");
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'users') {
+            usersDiv.innerHTML = msg.users.map(u => `<div>${u}</div>`).join('');
+          }
+        } catch {}
+      };
+      ws.onclose = () => console.log("ws closed");
+      ws.onerror = (e) => console.warn("ws error", e);
+    }
+    connectBtn.onclick = connect;
+
+    // --- 시선추적 → 실패 시 마우스 폴백 ---
+    function toContainer(xw, yw) {
+      const rect = wrap.getBoundingClientRect();
+      const x = xw - rect.left;
+      const y = yw - rect.top + window.scrollY;
+      return [x, y];
+    }
+    let sx = null, sy = null;
+    const ALPHA = 0.35;
+    function ema(x,y){ if(sx===null||sy===null){sx=x;sy=y;return [x,y];} sx=ALPHA*x+(1-ALPHA)*sx; sy=ALPHA*y+(1-ALPHA)*sy; return [sx,sy]; }
+
+    function enableMouseFallback(){
+      if (useMouseFallback) return;
+      useMouseFallback = true;
+      console.warn('[gaze] fallback → mouse');
+      window.addEventListener('mousemove', (e) => {
+        if (!ws || ws.readyState !== 1) return;
+        
+        const rect = wrap.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top + window.scrollY;
+        const now = Date.now();
+        const [ex,ey] = ema(x,y);
+
+        // [수정] 현재 위치 업데이트 및 캔버스 다시 그리기
+        currentGaze = { x: ex, y: ey };
+        drawOverlay(); 
+        
+        // 15Hz 전송/저장 제한
+        if (now - lastSent < MIN_DT) return;
+        lastSent = now;
+        
+        const [cx2,cy2]=applyClientCalib(ex,ey); 
+        ws.send(JSON.stringify({ type:'gaze', x:cx2, y:cy2, t:now, source:'mouse' }));
+        
+        // [신규] 클라이언트 버퍼에도 저장
+        recordGazeData(cx2, cy2, now);
+        
+      }, { passive:true });
+    }
+
+    async function startGaze(){
+      if (!('mediaDevices' in navigator) || !('getUserMedia' in navigator.mediaDevices)) {
+        return enableMouseFallback();
+      }
+      try{
+        window.webgazer
+          .setRegression('ridge')
+          .showVideoPreview(false).showPredictionPoints(false)
+          .showFaceOverlay(false).showFaceFeedbackBox(false);
+        await window.webgazer.begin();
+
+        let gotPrediction = false;
+        setTimeout(()=>{ if(!gotPrediction) enableMouseFallback(); }, 3000);
+
+        const loop = async () => {
+          try{
+            const pred = await window.webgazer.getCurrentPrediction();
+            const now = Date.now();
+            if (pred && typeof pred.x==='number' && typeof pred.y==='number') {
+              gotPrediction = true;
+              const [cx,cy] = toContainer(pred.x, pred.y);
+              const [ex,ey] = ema(cx,cy);
+              
+              // [수정] 현재 위치 업데이트 및 캔버스 다시 그리기
+              currentGaze = { x: ex, y: ey };
+              drawOverlay();
+
+              if (ws && ws.readyState===1 && (now-lastSent)>=MIN_DT) {
+                lastSent = now;
+                const [gx2,gy2]=applyClientCalib(ex,ey); 
+                ws.send(JSON.stringify({ type:'gaze', x:gx2, y:gy2, t:now, source:'gaze' }));
+                
+                // [신규] 클라이언트 버퍼에도 저장
+                recordGazeData(gx2, gy2, now);
+              }
+            }
+          }catch(e){ console.warn('[gaze] loop error', e); }
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      }catch(err){
+        console.warn('[gaze] begin failed', err);
+        enableMouseFallback();
+      }
+    }
+
+    // Connect 버튼: WS 연결 + 시선추적 시도
+    const oldConnect = connectBtn.onclick;
+    connectBtn.onclick = async () => { oldConnect(); await startGaze(); };
+ 
+    // --- 기사 로더 ---
+    async function loadArticle(v = "b1") {
+      try {
+        const res = await fetch(`${API}/article?v=${encodeURIComponent(v)}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+        document.getElementById('article').innerHTML = html;
+        
+        if (typeof resizeCanvas === 'function') resizeCanvas();
+        if (window.paintAOIs) paintAOIs([]);
+
+        // [신규] 새 기사 로드 시, 클라이언트 버퍼 초기화
+        gazePath = [];
+        gazeHeatmap = Array.from({length: heatmapRows}, () => Array(heatmapCols).fill(0));
+        drawOverlay(); // 캔버스 지우기
+
+      } catch (e) {
+        console.error('[loadArticle]', e);
+        alert('콘텐츠 로드 실패: 브라우저 콘솔을 확인하세요.');
+      }
+    }
+    loadBtn.onclick = () => {
+      const v = variantSel.value;
+      loadArticle(v);
+    };
+    loadArticle(variantSel.value); // 초기 로드
+
+    // --- 좌표 클라이언트 보정 (필요 시 사용) ---
+    function applyClientCalib(x,y) {
+      return [x,y];
+    }
+
+    // --- [신규] 그리기 토글 이벤트 리스너 ---
+    showPathCheck.onchange = () => {
+      showPath = showPathCheck.checked;
+      drawOverlay(); // 즉시 다시 그리기
+    };
+    showHeatmapCheck.onchange = () => {
+      showHeatmap = showHeatmapCheck.checked;
+      drawOverlay(); // 즉시 다시 그리기
+    };
+
+    // --- [신규] 클라이언트 데이터 내보내기 ---
+    exportBtn.onclick = () => {
+      const uid = userIdInput.value || 'user';
+
+      // 1. 경로 JSON 내보내기
+      const pathBlob = new Blob([JSON.stringify(gazePath)], { type: "application/json" });
+      const a1 = document.createElement("a");
+      a1.href = URL.createObjectURL(pathBlob);
+      a1.download = `gaze_path_${uid}.json`;
+      a1.click();
+      URL.revokeObjectURL(a1.href);
+
+      // 2. 히트맵 CSV 내보내기
+      const heatmapCsv = gazeHeatmap.map(row => row.join(",")).join("\n"); // 행바꿈 추가
+      const heatmapBlob = new Blob([heatmapCsv], { type: "text/csv" });
+      const a2 = document.createElement("a");
+      a2.href = URL.createObjectURL(heatmapBlob);
+      a2.download = `gaze_heatmap_${uid}.csv`;
+      a2.click();
+      URL.revokeObjectURL(a2.href);
+    };
+
+    // --- 서버 데이터 내보내기 (기존 기능) ---
+    exportCsvBtn.onclick = () => {
+      if (!ws || ws.readyState !== 1) return alert("WS에 연결되어 있지 않습니다.");
+      ws.send(JSON.stringify({ type: 'export', format: 'csv' }));
+    };
+    exportJsonBtn.onclick = () => {
+      if (!ws || ws.readyState !== 1) return alert("WS에 연결되어 있지 않습니다.");
+      ws.send(JSON.stringify({ type: 'export', format: 'json' }));
+    };
+
+  </script>
+  </body>
+</html>
