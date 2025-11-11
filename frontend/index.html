@@ -697,7 +697,7 @@
         gazePath.push({ x: currentGaze.x, y: currentGaze.y, t: endAt });
       }
       // accuracy-based score
-      const score = Math.round(Math.max(0, Math.min(100,())));
+      const score = Math.round(Math.max(0, Math.min(100, computeAccuracyScore())));
       // send score to server for admin EMA/grouping
       try {
         if (ws && ws.readyState === 1) {
