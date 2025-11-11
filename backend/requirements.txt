@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pillow
+numpy
+pandas
+sqlalchemy
+aioredis
+websockets
+python-multipart
